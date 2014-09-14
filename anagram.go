@@ -33,11 +33,6 @@ type sortedstring struct {
     sorted   RuneSlice
     original string
 }
-type sortedstringlist []sortedstring
-/*func (p sortedstringlist) Len() int           { return len(p) }
-func (p sortedstringlist) Less(i, j int) bool { return p[i].original < p[j].original }
-func (p sortedstringlist) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }*/
-
 
 func NewSortedString(s string) sortedstring {
     var letters RuneSlice
@@ -49,13 +44,13 @@ func NewSortedString(s string) sortedstring {
 }
 
 func subtractletters(base RuneSlice, subtrahend sortedstring) (bool, RuneSlice) {
-    var rest RuneSlice
-    //rest := make(RuneSlice, 0, len(base))
-    i := 0
-    j := 0
+    //var rest RuneSlice
     if  len(subtrahend.sorted) > len(base)  {
         return false, RuneSlice{}
     }
+    i := 0
+    j := 0
+    rest := make(RuneSlice, 0, len(base))
     for {
         if i >= len(subtrahend.sorted) {
             for _, r := range base[j:] {
@@ -88,7 +83,7 @@ func anagrammer(original string, words []string, maxdepth int) chan []string {
         }
     }
     sort.Strings(xs)
-    var xs_final sortedstringlist
+    var xs_final []sortedstring
     for i := range xs {
         if i == 0 || xs[i] != xs[i-1] {
             xs_final = append(xs_final, NewSortedString(xs[i]))
@@ -101,11 +96,17 @@ func anagrammer(original string, words []string, maxdepth int) chan []string {
         }
     }
     sort.Sort(charpool)
-    r := make(chan []string)
+    r := make(chan []string, 10)
+    lock := make(chan struct{}, 4)
+    lock <- struct{}{}
+    lock <- struct{}{}
+    lock <- struct{}{}
+    lock <- struct{}{}
+
     var wg sync.WaitGroup
 
     wg.Add(1)
-    go anagrammer_r(&wg, maxdepth, []string{}, r, charpool, xs_final)
+    go anagrammer_r(lock, &wg, maxdepth, []string{}, r, charpool, xs_final)
     go func() {
         wg.Wait()
         close(r)
@@ -113,9 +114,9 @@ func anagrammer(original string, words []string, maxdepth int) chan []string {
     return r
 }
 
-func anagrammer_r(wg *sync.WaitGroup, maxdepth int, prefix []string, r chan []string, pool []rune, words sortedstringlist) {
-    var validwords sortedstringlist
-    var pools []RuneSlice
+func anagrammer_r(lock chan struct{}, wg *sync.WaitGroup, maxdepth int, prefix []string, r chan []string, pool []rune, words []sortedstring) {
+    validwords := make([]sortedstring, 0, len(words))
+    pools := make([]RuneSlice, 0, len(words))
     for _, w := range words {
         success, newpool := subtractletters(pool, w)
         if success {
@@ -124,16 +125,17 @@ func anagrammer_r(wg *sync.WaitGroup, maxdepth int, prefix []string, r chan []st
         }
     }
     for i, w := range validwords {
-        newpool := pools[i]
         new_prefix := append(prefix, w.original)
-        if len(newpool) == 0 {
+        if len(pools[i]) == 0 {
             r <- new_prefix
         } else if len(prefix) != maxdepth {
             wg.Add(1)
-            anagrammer_r(wg, maxdepth, new_prefix, r, newpool, validwords)
+            go anagrammer_r(lock, wg, maxdepth, new_prefix, r, pools[i], validwords)
+            <- lock
         }
     }
     wg.Done()
+    lock <- struct{}{}
 }
 
 func main() {
@@ -144,7 +146,7 @@ func main() {
     pprof.StartCPUProfile(f)
     defer pprof.StopCPUProfile()
 
-    depth := flag.Int("maxwords", -1, "Maximum words")
+    depth := flag.Int("depth", -1, "Maximum recursion depth")
     flag.Parse()
     anagram := flag.Arg(0)
     println(anagram)

@@ -43,36 +43,6 @@ func NewSortedString(s string) sortedstring {
     return sortedstring{letters, s}
 }
 
-func subtractletters(base RuneSlice, subtrahend sortedstring) (bool, RuneSlice) {
-    //var rest RuneSlice
-    if  len(subtrahend.sorted) > len(base)  {
-        return false, RuneSlice{}
-    }
-    i := 0
-    j := 0
-    rest := make(RuneSlice, 0, len(base))
-    for {
-        if i >= len(subtrahend.sorted) {
-            for _, r := range base[j:] {
-                rest = append(rest, r)
-            }
-            break
-        }
-        if j >= len(base) {
-            return false, RuneSlice{}
-        }
-        if base[j] < subtrahend.sorted[i] {
-            rest = append(rest, base[j])
-        } else if base[j] == subtrahend.sorted[i] {
-            i++
-        } else {
-            return false, RuneSlice{}
-        }
-        j++
-    }
-    return true, rest
-}
-
 func anagrammer(original string, words []string, maxdepth int) chan []string {
     var xs []string
     for _, t := range words {
@@ -114,23 +84,53 @@ func anagrammer(original string, words []string, maxdepth int) chan []string {
     return r
 }
 
+func haverunes(base RuneSlice, subtrahend RuneSlice) (bool) {
+    j := 0
+    for _, a := range subtrahend {
+        for {
+            if j == len(base) {
+                return false
+            }
+            if a == base[j] {
+                j++
+                break
+            }
+            j++
+        }
+    }
+    return true
+}
+func removerunes(base RuneSlice, subtrahend RuneSlice) RuneSlice{
+    rest := make(RuneSlice, 0, len(base))
+    i := 0
+    for _, a := range base {
+        if i < len(subtrahend) && a == subtrahend[i] {
+            i++
+        } else {
+            rest = append(rest, a)
+        }
+    }
+    return rest
+}
+
+
 func anagrammer_r(lock chan struct{}, wg *sync.WaitGroup, maxdepth int, prefix []string, r chan []string, pool []rune, words []sortedstring) {
     validwords := make([]sortedstring, 0, len(words))
-    pools := make([]RuneSlice, 0, len(words))
     for _, w := range words {
-        success, newpool := subtractletters(pool, w)
-        if success {
-            pools = append(pools, newpool)
+        if haverunes(pool, w.sorted) {
             validwords = append(validwords, w)
         }
     }
-    for i, w := range validwords {
+    for _, w := range validwords {
         new_prefix := append(prefix, w.original)
-        if len(pools[i]) == 0 {
+        newpool := removerunes(pool, w.sorted)
+        //fmt.Printf("%#v - %#v = %#v\n", string(pool), string(w.sorted), string(newpool))
+
+        if len(newpool) == 0 {
             r <- new_prefix
         } else if len(prefix) != maxdepth {
             wg.Add(1)
-            go anagrammer_r(lock, wg, maxdepth, new_prefix, r, pools[i], validwords)
+            go anagrammer_r(lock, wg, maxdepth, new_prefix, r, newpool, validwords)
             <- lock
         }
     }

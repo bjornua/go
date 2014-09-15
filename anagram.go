@@ -6,8 +6,8 @@ import (
     "strings"
     "bufio"
     "sort"
-    "fmt"
     "sync"
+    //"fmt"
     "flag"
     "runtime"
     "runtime/pprof"
@@ -32,7 +32,7 @@ func (p RuneSlice) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
 
 type sortedstring struct {
     sorted   []rune
-    original string
+    original []byte
 }
 
 func NewSortedString(s string) sortedstring {
@@ -41,11 +41,30 @@ func NewSortedString(s string) sortedstring {
         letters = append(letters, x)
     }
     sort.Sort(letters)
-    return sortedstring{[]rune(letters), s}
+    return sortedstring{[]rune(letters), []byte(s)}
+}
+
+func spawner(limit int) (func(func()), *sync.WaitGroup) {
+    var wg sync.WaitGroup
+    lock := make(chan struct{}, limit)
+    for x := 0; x < limit; x++ {
+        lock <- struct{}{}
+    }
+    wrapper := func(f func()){
+        wg.Add(1)
+        go func(){
+            f()
+            lock <- struct{}{}
+            wg.Done()
+        }()
+        <- lock
+    }
+    return wrapper, &wg
 }
 
 
-func anagrammer(original string, words []string, maxdepth int) chan []string {
+
+func anagrammer(original string, words []string, maxdepth int) chan prefix {
     var xs []string
     for _, t := range words {
         t = strings.Trim(t, " \n")
@@ -69,21 +88,17 @@ func anagrammer(original string, words []string, maxdepth int) chan []string {
     }
     sort.Sort(charpool)
 
-    r := make(chan []string, 10)
-    lock := make(chan struct{}, 4)
-    lock <- struct{}{}
-    lock <- struct{}{}
-    lock <- struct{}{}
-    lock <- struct{}{}
+    r := make(chan prefix, 10)
+    spa, wg := spawner(8)
 
-    var wg sync.WaitGroup
-
-    wg.Add(1)
-    go anagrammer_r(lock, &wg, maxdepth, []string{}, r, charpool, xs_final)
     go func() {
+        spa(func(){
+            anagrammer_r(spa, 0, maxdepth, nil, r, charpool, xs_final)
+        })
         wg.Wait()
         close(r)
     }()
+
     return r
 }
 
@@ -94,7 +109,7 @@ func haverunes(base []rune, subtrahend []rune) (bool) {
     j := 0
     for _, a := range subtrahend {
         for {
-            if j == len(base) {
+            if j == len(base) || base[j] > a  {
                 return false
             }
             if a == base[j] {
@@ -127,22 +142,23 @@ func filterwords(pool []rune, words []sortedstring) []sortedstring{
     }
     return validwords
 }
-
-func anagrammer_r(lock chan struct{}, wg *sync.WaitGroup, maxdepth int, prefix []string, r chan []string, pool []rune, words []sortedstring) {
+type prefix struct {
+    parent *prefix
+    text []byte
+}
+func anagrammer_r(spa func(func()), depth int, maxdepth int, p *prefix, r chan prefix, pool []rune, words []sortedstring) {
     validwords := filterwords(pool, words)
     for _, w := range validwords {
-        new_prefix := append(prefix, w.original)
+        newprefix := prefix{p, w.original}
         newpool := removerunes(pool, w.sorted)
         if len(newpool) == 0 {
-            r <- new_prefix
-        } else if len(prefix) != maxdepth {
-            wg.Add(1)
-            go anagrammer_r(lock, wg, maxdepth, new_prefix, r, newpool, validwords)
-            <- lock
+            r <- newprefix
+        } else if depth != maxdepth {
+            spa(func(){
+                anagrammer_r(spa, depth+1, maxdepth, &newprefix, r, newpool, validwords)
+            })
         }
     }
-    wg.Done()
-    lock <- struct{}{}
 }
 
 func main() {
@@ -163,15 +179,18 @@ func main() {
 
     words := parseWordlist(os.Stdin)
     result := anagrammer(anagram, words, *depth)
-    
-    for r := range result {
-        fmt.Print(r[0])
-        for i := 1; i < len(r); i++ {
-            fmt.Print(" ")
-            fmt.Print(r[i])
-       }
-       fmt.Println()
-
+    w := bufio.NewWriter(os.Stdout)
+    for p := range result {
+        for {
+            w.Write(p.text)
+            w.Write([]byte(" "))
+            if p.parent == nil {
+                break
+            }
+            p = *p.parent
+        }
+        w.Write([]byte("\n"))
     }
+    w.Flush()
 
 }

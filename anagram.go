@@ -9,10 +9,11 @@ import (
     "fmt"
     "sync"
     "flag"
-//    "bytes"
+    "runtime"
     "runtime/pprof"
 )
 
+//import _     "net/http/pprof"
 
 func parseWordlist(r io.Reader) []string {
     var xs []string
@@ -30,7 +31,7 @@ func (p RuneSlice) Less(i, j int) bool { return p[i] < p[j] }
 func (p RuneSlice) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
 
 type sortedstring struct {
-    sorted   RuneSlice
+    sorted   []rune
     original string
 }
 
@@ -40,8 +41,9 @@ func NewSortedString(s string) sortedstring {
         letters = append(letters, x)
     }
     sort.Sort(letters)
-    return sortedstring{letters, s}
+    return sortedstring{[]rune(letters), s}
 }
+
 
 func anagrammer(original string, words []string, maxdepth int) chan []string {
     var xs []string
@@ -66,6 +68,7 @@ func anagrammer(original string, words []string, maxdepth int) chan []string {
         }
     }
     sort.Sort(charpool)
+
     r := make(chan []string, 10)
     lock := make(chan struct{}, 4)
     lock <- struct{}{}
@@ -84,7 +87,10 @@ func anagrammer(original string, words []string, maxdepth int) chan []string {
     return r
 }
 
-func haverunes(base RuneSlice, subtrahend RuneSlice) (bool) {
+func haverunes(base []rune, subtrahend []rune) (bool) {
+    if len(subtrahend) > len(base) {
+        return false
+    }
     j := 0
     for _, a := range subtrahend {
         for {
@@ -100,8 +106,8 @@ func haverunes(base RuneSlice, subtrahend RuneSlice) (bool) {
     }
     return true
 }
-func removerunes(base RuneSlice, subtrahend RuneSlice) RuneSlice{
-    rest := make(RuneSlice, 0, len(base))
+func removerunes(base []rune, subtrahend []rune) []rune{
+    rest := make([]rune, 0, len(base))
     i := 0
     for _, a := range base {
         if i < len(subtrahend) && a == subtrahend[i] {
@@ -112,20 +118,21 @@ func removerunes(base RuneSlice, subtrahend RuneSlice) RuneSlice{
     }
     return rest
 }
-
-
-func anagrammer_r(lock chan struct{}, wg *sync.WaitGroup, maxdepth int, prefix []string, r chan []string, pool []rune, words []sortedstring) {
+func filterwords(pool []rune, words []sortedstring) []sortedstring{
     validwords := make([]sortedstring, 0, len(words))
     for _, w := range words {
         if haverunes(pool, w.sorted) {
             validwords = append(validwords, w)
         }
     }
+    return validwords
+}
+
+func anagrammer_r(lock chan struct{}, wg *sync.WaitGroup, maxdepth int, prefix []string, r chan []string, pool []rune, words []sortedstring) {
+    validwords := filterwords(pool, words)
     for _, w := range validwords {
         new_prefix := append(prefix, w.original)
         newpool := removerunes(pool, w.sorted)
-        //fmt.Printf("%#v - %#v = %#v\n", string(pool), string(w.sorted), string(newpool))
-
         if len(newpool) == 0 {
             r <- new_prefix
         } else if len(prefix) != maxdepth {
@@ -139,9 +146,11 @@ func anagrammer_r(lock chan struct{}, wg *sync.WaitGroup, maxdepth int, prefix [
 }
 
 func main() {
+    runtime.GOMAXPROCS(4)
+
     f, err := os.Create("profile.pprof")
     if err != nil {
-        panic(err)
+         panic(err)
     }
     pprof.StartCPUProfile(f)
     defer pprof.StopCPUProfile()
@@ -163,8 +172,6 @@ func main() {
        }
        fmt.Println()
 
-        //fmt.Printf("%s = %s\n", string(anagram), x)
     }
 
-    //fmt.Printf("%#v\n", words[:50])
 }
